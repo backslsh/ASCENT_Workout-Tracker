@@ -1,4 +1,4 @@
-# Ascend — gamified lifting tracker (iOS, sideload-ready)
+# Ascend — gamified lifting tracker (iOS)
 
 A native SwiftUI iPhone app: log gym **and** home workouts, run workout and rest timers, and earn ranks
 (Iron → Bronze → Silver → Gold → Platinum → Diamond → Master → Grandmaster → Legend, each with
