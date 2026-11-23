@@ -25,6 +25,7 @@ struct WorkoutSummary: Identifiable {
     let session: WorkoutSession
     let prs: [PRItem]
     let rankUps: [RankUp]
+    let achievements: [Achievement]
 }
 
 struct HistoryPoint: Identifiable {
@@ -34,26 +35,39 @@ struct HistoryPoint: Identifiable {
     let sets: [SetEntry]
 }
 
+/// A "try this today" suggestion based on the last time an exercise was done.
+struct ProgressionHint: Hashable {
+    let title: String
+    let detail: String
+    /// Target values for working sets, in order (the last one repeats for extra sets).
+    let targets: [SetEntry]
+}
+
 final class AppStore: ObservableObject {
-    @Published var profile: Profile { didSet { scheduleSave() } }
+    @Published var profile: Profile { didSet { profileChanged(from: oldValue) } }
     @Published var routines: [Routine] { didSet { scheduleSave() } }
     @Published var sessions: [WorkoutSession] { didSet { recomputeBests(); scheduleSave() } }
     @Published var customExercises: [Exercise] { didSet { rebuildIndex(); scheduleSave() } }
-    @Published var active: WorkoutSession? { didSet { scheduleSave() } }
+    @Published var active: WorkoutSession? { didSet { scheduleSave(); syncLiveActivity() } }
+    @Published var exerciseNotes: [String: String] { didSet { scheduleSave() } }
+    @Published var weightLog: [WeightEntry] { didSet { scheduleSave() } }
+    @Published var unlocked: [String: Date] { didSet { scheduleSave() } }
+    @Published var lastAutoBackup: Date? { didSet { scheduleSave() } }
 
     @Published var showActive = false
-    @Published var restEnd: Date?
+    @Published var restEnd: Date? { didSet { syncLiveActivity() } }
     @Published var restTotal: Int = 90
     @Published var lastSummary: WorkoutSummary?
     @Published private(set) var bests: [String: Best] = [:]
+    @Published private(set) var prCount = 0
 
     private(set) var index: [String: Exercise] = [:]
     private var saveWork: DispatchWorkItem?
+    var lastWidgetData: Data?
 
-    static var fileURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ascend-data.json")
-    }
+    static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+    static var fileURL: URL { documents.appendingPathComponent("ascend-data.json") }
+    static var backupDir: URL { documents.appendingPathComponent("Backups", isDirectory: true) }
 
     init() {
         let url = Self.fileURL
@@ -73,15 +87,44 @@ final class AppStore: ObservableObject {
             sessions = d.sessions.sorted { $0.start > $1.start }
             customExercises = d.customExercises
             active = d.active
+            exerciseNotes = d.exerciseNotes ?? [:]
+            weightLog = (d.weightLog ?? []).sorted { $0.date < $1.date }
+            unlocked = d.achievements ?? [:]
+            lastAutoBackup = d.lastAutoBackup
         } else {
             profile = Profile()
             routines = Templates.routines
             sessions = []
             customExercises = []
             active = nil
+            exerciseNotes = [:]
+            weightLog = []
+            unlocked = [:]
+            lastAutoBackup = nil
         }
+        ThemeManager.shared.theme = profile.accent
+        Sounds.enabled = profile.sounds
         rebuildIndex()
         recomputeBests()
+        if weightLog.isEmpty && profile.onboarded {
+            weightLog = [WeightEntry(date: sessions.last?.start ?? Date(), kg: profile.bodyweight)]
+        }
+        // Record achievements already earned (e.g. after an update) without announcing them.
+        _ = refreshAchievements()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self else { return }
+            self.autoBackupIfNeeded()
+            self.syncLiveActivity()
+            self.writeWidgetSnapshot()
+        }
+    }
+
+    private func profileChanged(from old: Profile) {
+        if profile.accent != old.accent { ThemeManager.shared.theme = profile.accent }
+        Sounds.enabled = profile.sounds
+        if profile.liveActivity != old.liveActivity { syncLiveActivity() }
+        scheduleSave()
     }
 
     // MARK: Exercises
@@ -119,21 +162,42 @@ final class AppStore: ObservableObject {
         return out
     }
 
+    /// Whether the exercise fits the user's "My Equipment" list (bodyweight always does).
+    func canDo(_ ex: Exercise) -> Bool {
+        profile.myEquipment.isEmpty || ex.equipment == .bodyweight || profile.myEquipment.contains(ex.equipment)
+    }
+
+    // MARK: Notes
+
+    func note(for id: String) -> String { exerciseNotes[id] ?? "" }
+
+    func setNote(_ text: String, for id: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { exerciseNotes.removeValue(forKey: id) } else { exerciseNotes[id] = t }
+    }
+
     // MARK: Ranks
 
     func recomputeBests() {
         var d: [String: Best] = [:]
-        for s in sessions {
+        var prs = 0
+        // Oldest first, so we can count how many times a best was beaten.
+        for s in sessions.reversed() {
             let bw = s.bodyweight ?? profile.bodyweight
             for e in s.entries {
                 guard let ex = index[e.exerciseID] else { continue }
                 for set in e.sets where set.done && !set.isWarmup {
                     let p = RankEngine.performance(of: set, exercise: ex, bodyweight: bw)
-                    if p > (d[ex.id]?.perf ?? 0) { d[ex.id] = Best(perf: p, set: set, date: s.start) }
+                    let old = d[ex.id]?.perf ?? 0
+                    if p > old + 1e-9 {
+                        if old > 0 { prs += 1 }
+                        d[ex.id] = Best(perf: p, set: set, date: s.start)
+                    }
                 }
             }
         }
         bests = d
+        prCount = prs
     }
 
     func score(_ id: String) -> Double? {
@@ -176,6 +240,13 @@ final class AppStore: ObservableObject {
 
     func weightText(_ kg: Double) -> String {
         "\(fmtNumber(profile.units.display(kg))) \(profile.units.rawValue)"
+    }
+
+    /// Rounded for big numbers (e.g. "4,500 kg").
+    func roundWeightText(_ kg: Double) -> String {
+        let v = profile.units.display(kg)
+        let r = v >= 1000 ? (v / 100).rounded() * 100 : v.rounded()
+        return "\(fmtNumber(r)) \(profile.units.rawValue)"
     }
 
     func setText(_ s: SetEntry, _ ex: Exercise) -> String {
@@ -226,26 +297,77 @@ final class AppStore: ObservableObject {
         return nil
     }
 
+    // MARK: Progression hints
+
+    func progressionHint(for entry: ExerciseEntry) -> ProgressionHint? {
+        guard let ex = exercise(entry.exerciseID),
+              let last = lastSets(for: ex.id)?.filter({ $0.done && !$0.isWarmup }), !last.isEmpty else { return nil }
+        let units = profile.units
+        switch ex.kind {
+        case .weighted:
+            guard let top = last.max(by: { ($0.weight, $0.reps) < ($1.weight, $1.reps) }), top.weight > 0 else { return nil }
+            let atTop = last.filter { abs($0.weight - top.weight) < 0.01 }
+            let minReps = atTop.map { $0.reps }.min() ?? top.reps
+            let sameReps = Set(atTop.map { $0.reps }).count == 1
+            let shown = (units.display(top.weight) * 2).rounded() / 2
+            let lastText = "\(fmtNumber(shown)) × \(minReps)"
+            if minReps >= 10 || (minReps <= 5 && sameReps && atTop.count >= 2) {
+                let newShown = shown + weightIncrement(ex)
+                let reps = minReps >= 10 ? max(6, minReps - 2) : minReps
+                let kg = units.toKg(newShown)
+                return ProgressionHint(title: "Go up: \(fmtNumber(newShown)) \(units.rawValue) × \(reps)",
+                                       detail: "You hit \(lastText) on every top set last time",
+                                       targets: [SetEntry(weight: kg, reps: reps)])
+            }
+            return ProgressionHint(title: "Aim for \(minReps + 1) reps at \(fmtNumber(shown)) \(units.rawValue)",
+                                   detail: "Last time: \(lastText). One more rep, then add weight",
+                                   targets: [SetEntry(weight: top.weight, reps: minReps + 1)])
+        case .reps:
+            let best = last.map { $0.reps }.max() ?? 0
+            guard best > 0 else { return nil }
+            return ProgressionHint(title: "Beat \(best): aim for \(best + 1) reps",
+                                   detail: "Add one rep to each set",
+                                   targets: last.map { SetEntry(weight: $0.weight, reps: $0.reps + 1) })
+        case .timed:
+            let best = last.map { $0.seconds }.max() ?? 0
+            guard best > 0 else { return nil }
+            return ProgressionHint(title: "Hold for \(fmtDuration(Double(best + 5)))",
+                                   detail: "Last best: \(fmtDuration(Double(best))). Add 5 seconds",
+                                   targets: last.map { SetEntry(weight: $0.weight, seconds: $0.seconds + 5) })
+        }
+    }
+
+    private func weightIncrement(_ ex: Exercise) -> Double {
+        let lower = ex.muscle == .legs || ex.muscle == .glutes || ex.id == "deadlift"
+        switch profile.units {
+        case .lb:
+            if ex.equipment == .barbell || ex.equipment == .machine { return lower ? 10 : 5 }
+            return 5
+        case .kg:
+            if ex.equipment == .barbell || ex.equipment == .machine { return lower ? 5 : 2.5 }
+            if ex.equipment == .dumbbell || ex.equipment == .kettlebell { return 2 }
+            return 2.5
+        }
+    }
+
+    func apply(_ hint: ProgressionHint, to entry: inout ExerciseEntry) {
+        guard !hint.targets.isEmpty else { return }
+        var n = 0
+        for i in entry.sets.indices where !entry.sets[i].isWarmup {
+            defer { n += 1 }
+            guard !entry.sets[i].done else { continue }
+            let t = hint.targets[min(n, hint.targets.count - 1)]
+            entry.sets[i].weight = t.weight
+            entry.sets[i].reps = t.reps
+            entry.sets[i].seconds = t.seconds
+        }
+    }
+
     // MARK: Stats
 
-    var workoutsThisWeek: Int {
-        let cal = Calendar.current
-        return sessions.filter { cal.isDate($0.start, equalTo: Date(), toGranularity: .weekOfYear) }.count
-    }
+    var workoutsThisWeek: Int { TrainingMath.workoutsThisWeek(sessions.map { $0.start }) }
 
-    var weekStreak: Int {
-        let cal = Calendar.current
-        guard var week = cal.dateInterval(of: .weekOfYear, for: Date())?.start else { return 0 }
-        let starts = Set(sessions.compactMap { cal.dateInterval(of: .weekOfYear, for: $0.start)?.start })
-        if !starts.contains(week) { week = cal.date(byAdding: .weekOfYear, value: -1, to: week) ?? week }
-        var streak = 0
-        while starts.contains(week) {
-            streak += 1
-            guard let prev = cal.date(byAdding: .weekOfYear, value: -1, to: week) else { break }
-            week = prev
-        }
-        return streak
-    }
+    var weekStreak: Int { TrainingMath.weekStreak(sessions.map { $0.start }) }
 
     var totalVolume: Double { sessions.reduce(0) { $0 + $1.volume } }
 
@@ -258,6 +380,114 @@ final class AppStore: ObservableObject {
             if out.count == 5 { break }
         }
         return out
+    }
+
+    func lastTrained(_ g: MuscleGroup) -> Date? {
+        sessions.first { s in s.entries.contains { exercise($0.exerciseID)?.muscle == g } }?.start
+    }
+
+    func daysSince(_ date: Date?) -> Int? {
+        guard let date else { return nil }
+        let cal = Calendar.current
+        return cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day
+    }
+
+    /// Working sets for a muscle group in the last `days` days.
+    func recentSets(_ g: MuscleGroup, days: Int = 7) -> Int {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
+        return sessions.prefix(while: { $0.start >= cutoff }).reduce(0) { acc, s in
+            acc + s.entries.filter { exercise($0.exerciseID)?.muscle == g }
+                .reduce(0) { $0 + $1.sets.filter { $0.done && !$0.isWarmup }.count }
+        }
+    }
+
+    func isHomeSession(_ s: WorkoutSession) -> Bool {
+        !s.entries.isEmpty && s.entries.allSatisfy { exercise($0.exerciseID)?.equipment.isHome ?? false }
+    }
+
+    // MARK: Achievements
+
+    func achievementValue(_ m: AchievementMetric) -> Double {
+        let cal = Calendar.current
+        switch m {
+        case .workouts: return Double(sessions.count)
+        case .longestStreak: return Double(TrainingMath.longestWeekStreak(sessions.map { $0.start }))
+        case .totalSets: return Double(sessions.reduce(0) { $0 + $1.completedSets })
+        case .maxSessionVolume: return sessions.map { $0.volume }.max() ?? 0
+        case .totalVolume: return totalVolume
+        case .prs: return Double(prCount)
+        case .bestTier: return Double(bests.keys.compactMap { rank($0)?.tier.rawValue }.max() ?? -1)
+        case .groupsRanked: return Double(MuscleGroup.allCases.filter { groupScore($0) != nil }.count)
+        case .overallTier: return Double(overallScore().map { RankInfo.from(score: $0).tier.rawValue } ?? -1)
+        case .homeWorkouts: return Double(sessions.filter(isHomeSession).count)
+        case .earlyBird: return Double(sessions.filter { cal.component(.hour, from: $0.start) < 7 }.count)
+        case .nightOwl: return Double(sessions.filter { cal.component(.hour, from: $0.start) >= 21 }.count)
+        case .weighIns: return Double(weightLog.count)
+        case .longestSession: return (sessions.map { $0.duration }.max() ?? 0) / 60
+        }
+    }
+
+    func achievementProgress(_ a: Achievement) -> Double {
+        if unlocked[a.id] != nil { return 1 }
+        let v = achievementValue(a.metric)
+        if a.metric.display == .tier { return min(1, max(0, v + 1) / (a.goal + 1)) }
+        return min(1, max(0, v) / a.goal)
+    }
+
+    func achievementProgressText(_ a: Achievement) -> String {
+        let v = achievementValue(a.metric)
+        switch a.metric.display {
+        case .count: return "\(Int(min(v, a.goal)))/\(Int(a.goal))"
+        case .weight: return "\(roundWeightText(min(v, a.goal))) / \(roundWeightText(a.goal))"
+        case .minutes: return "\(Int(min(v, a.goal)))/\(Int(a.goal)) min"
+        case .tier: return v >= 0 ? "Best: \(RankTier(rawValue: Int(v))?.name ?? "—")" : "Unranked"
+        }
+    }
+
+    func achievementDetail(_ a: Achievement) -> String {
+        a.detail.replacingOccurrences(of: "{w}", with: roundWeightText(a.goal))
+    }
+
+    /// Unlocks anything newly earned and returns it.
+    @discardableResult
+    func refreshAchievements() -> [Achievement] {
+        var new: [Achievement] = []
+        var u = unlocked
+        for a in Achievements.all where u[a.id] == nil && achievementValue(a.metric) >= a.goal {
+            u[a.id] = Date()
+            new.append(a)
+        }
+        if !new.isEmpty { unlocked = u }
+        return new
+    }
+
+    // MARK: Bodyweight
+
+    func logWeight(kg: Double, date: Date = Date()) {
+        let cal = Calendar.current
+        var log = weightLog
+        if let i = log.firstIndex(where: { cal.isDate($0.date, inSameDayAs: date) }) {
+            log[i].kg = kg
+            log[i].date = date
+        } else {
+            log.append(WeightEntry(date: date, kg: kg))
+        }
+        log.sort { $0.date < $1.date }
+        weightLog = log
+        if let latest = log.last, abs(latest.kg - profile.bodyweight) > 0.001 { profile.bodyweight = latest.kg }
+        refreshAchievements()
+    }
+
+    func deleteWeight(_ id: UUID) {
+        weightLog.removeAll { $0.id == id }
+        if let latest = weightLog.last { profile.bodyweight = latest.kg }
+    }
+
+    /// Logs today's weight if it was edited elsewhere (e.g. Settings).
+    func syncWeightLog() {
+        guard profile.onboarded else { return }
+        if let last = weightLog.last, abs(last.kg - profile.bodyweight) < 0.05 { return }
+        logWeight(kg: profile.bodyweight)
     }
 
     // MARK: Routines
@@ -342,8 +572,10 @@ final class AppStore: ObservableObject {
 
     func startWorkout(name: String, entries: [ExerciseEntry], routineID: UUID?) {
         if active != nil { showActive = true; return }
+        var prepared = entries.map { prepare($0) }
+        prepared.normalizeSupersets()
         active = WorkoutSession(name: name, routineID: routineID, start: Date(), end: nil,
-                                entries: entries.map { prepare($0) }, bodyweight: profile.bodyweight)
+                                entries: prepared, bodyweight: profile.bodyweight)
         if let rid = routineID, let i = routines.firstIndex(where: { $0.id == rid }) {
             routines[i].lastUsed = Date()
         }
@@ -370,6 +602,7 @@ final class AppStore: ObservableObject {
             e.sets = e.sets.filter { $0.done }
             return e.sets.isEmpty ? nil : e
         }
+        s.entries.normalizeSupersets()
         s.end = Date()
         cancelRest()
         showActive = false
@@ -400,8 +633,10 @@ final class AppStore: ObservableObject {
                 }
             }
         }
-        let summary = WorkoutSummary(session: s, prs: prs, rankUps: ups)
+        let earned = refreshAchievements()
+        let summary = WorkoutSummary(session: s, prs: prs, rankUps: ups, achievements: earned)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.lastSummary = summary }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.autoBackupIfNeeded() }
     }
 
     func discardWorkout() {
@@ -425,8 +660,8 @@ final class AppStore: ObservableObject {
         guard let end = restEnd else { return }
         let newEnd = end.addingTimeInterval(TimeInterval(delta))
         if newEnd <= Date().addingTimeInterval(1) { cancelRest(); return }
-        restEnd = newEnd
         restTotal = max(restTotal + delta, Int(newEnd.timeIntervalSinceNow.rounded(.up)))
+        restEnd = newEnd
         if profile.restNotifications { Notifier.scheduleRest(after: newEnd.timeIntervalSinceNow) }
         Haptics.tap()
     }
@@ -440,12 +675,13 @@ final class AppStore: ObservableObject {
         if let end = restEnd, Date() >= end {
             withAnimation(Theme.spring) { restEnd = nil }
             Haptics.success()
+            Sounds.restDone()
         }
     }
 
     // MARK: Persistence
 
-    private func scheduleSave() {
+    func scheduleSave() {
         saveWork?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.saveNow() }
         saveWork = w
@@ -456,10 +692,12 @@ final class AppStore: ObservableObject {
         if let d = try? JSONEncoder().encode(currentData()) {
             try? d.write(to: Self.fileURL, options: .atomic)
         }
+        writeWidgetSnapshot()
     }
 
     private func currentData() -> AppData {
-        AppData(profile: profile, routines: routines, sessions: sessions, customExercises: customExercises, active: active)
+        AppData(profile: profile, routines: routines, sessions: sessions, customExercises: customExercises, active: active,
+                exerciseNotes: exerciseNotes, weightLog: weightLog, achievements: unlocked, lastAutoBackup: lastAutoBackup)
     }
 
     func exportData() -> Data {
@@ -473,10 +711,14 @@ final class AppStore: ObservableObject {
         customExercises = d.customExercises
         routines = d.routines
         sessions = d.sessions.sorted { $0.start > $1.start }
+        exerciseNotes = d.exerciseNotes ?? [:]
+        weightLog = (d.weightLog ?? []).sorted { $0.date < $1.date }
+        unlocked = d.achievements ?? [:]
         var p = d.profile
         p.onboarded = true
         profile = p
         active = nil
+        refreshAchievements()
         saveNow()
     }
 
@@ -487,8 +729,36 @@ final class AppStore: ObservableObject {
         customExercises = []
         sessions = []
         routines = Templates.routines
+        exerciseNotes = [:]
+        weightLog = []
+        unlocked = [:]
         profile = Profile()
         saveNow()
+    }
+
+    // MARK: Automatic backups (Files › On My iPhone › Ascend › Backups)
+
+    @discardableResult
+    func autoBackupIfNeeded(force: Bool = false) -> Bool {
+        if !force {
+            guard profile.autoBackup, !sessions.isEmpty else { return false }
+            if let last = lastAutoBackup, Date().timeIntervalSince(last) < 7 * 86400 { return false }
+        }
+        let fm = FileManager.default
+        let dir = Self.backupDir
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        let file = dir.appendingPathComponent("Ascend-Backup-\(f.string(from: Date())).json")
+        do { try exportData().write(to: file, options: .atomic) } catch { return false }
+        lastAutoBackup = Date()
+        // Keep the 6 most recent.
+        if let files = try? fm.contentsOfDirectory(atPath: dir.path) {
+            let backups = files.filter { $0.hasPrefix("Ascend-Backup-") && $0.hasSuffix(".json") }.sorted(by: >)
+            for name in backups.dropFirst(6) { try? fm.removeItem(at: dir.appendingPathComponent(name)) }
+        }
+        return true
     }
 }
 

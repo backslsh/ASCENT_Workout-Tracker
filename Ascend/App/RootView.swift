@@ -63,6 +63,25 @@ struct RootView: View {
                 }
         }
         .onReceive(ticker) { _ in store.tick() }
+        .onOpenURL(perform: handleLink)
+        .tint(Theme.accent)
+    }
+
+    /// Deep links from the widget and Live Activity: ascend://workout, ascend://start, ascend://routine/<id>
+    private func handleLink(_ url: URL) {
+        guard url.scheme == "ascend", store.profile.onboarded else { return }
+        switch url.host {
+        case "workout":
+            if store.active != nil { store.showActive = true }
+        case "start":
+            if store.active != nil { store.showActive = true } else { store.startEmpty() }
+        case "routine":
+            if let id = UUID(uuidString: url.lastPathComponent), let r = store.routines.first(where: { $0.id == id }) {
+                store.startWorkout(r)
+            }
+        default:
+            break
+        }
     }
 
     @ViewBuilder

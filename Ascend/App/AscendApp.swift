@@ -10,7 +10,6 @@ struct AscendApp: App {
             RootView()
                 .environmentObject(store)
                 .preferredColorScheme(.dark)
-                .tint(Theme.accent)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { store.saveNow() }

@@ -43,6 +43,18 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/Ascend.app Payload/
+          ls Payload/Ascend.app/PlugIns || echo "::warning::No widget extension found in the app bundle"
+
+          # Ad-hoc sign so the App Group entitlement travels with the IPA.
+          # Sideloadly re-signs everything with your Apple ID and reads these entitlements.
+          APPEX="Payload/Ascend.app/PlugIns/AscendWidgets.appex"
+          if [ -d "$APPEX" ]; then
+            codesign --force --sign - --generate-entitlement-der --entitlements Support/AscendWidgets.entitlements "$APPEX" \
+              || echo "::warning::Could not ad-hoc sign the widget extension"
+          fi
+          codesign --force --sign - --generate-entitlement-der --entitlements Support/Ascend.entitlements Payload/Ascend.app \
+            || echo "::warning::Could not ad-hoc sign the app"
+
           zip -qry Ascend.ipa Payload
           ls -lh Ascend.ipa
 

@@ -14,9 +14,13 @@ struct RanksView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     ScreenHeader(title: "Ranks", subtitle: "Highest to lowest") {
-                        GlassIconButton(symbol: "questionmark") { showInfo = true }
+                        HStack(spacing: 10) {
+                            ShareRankButton(card: overallCard)
+                            GlassIconButton(symbol: "questionmark") { showInfo = true }
+                        }
                     }
                     OverallRankCard()
+                    MuscleHeatmapCard()
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                         ForEach(Array(sortedGroups.enumerated()), id: \.element) { i, g in
                             NavigationLink(value: g) {
@@ -24,6 +28,9 @@ struct RanksView: View {
                             }
                             .buttonStyle(.pressable)
                         }
+                    }
+                    if !store.sessions.isEmpty {
+                        BalanceCard()
                     }
                 }
                 .padding(.horizontal, 20)
@@ -36,6 +43,18 @@ struct RanksView: View {
             .navigationDestination(for: ExerciseRoute.self) { ExerciseDetailView(exerciseID: $0.id) }
             .sheet(isPresented: $showInfo) { RankLadderSheet().environmentObject(store) }
         }
+    }
+
+    private var overallCard: RankShareCard {
+        let ranked = MuscleGroup.allCases.filter { store.groupScore($0) != nil }.count
+        let top = sortedGroups.first.flatMap { g in store.groupRank(g).map { _ in g.name } } ?? "—"
+        return RankShareCard(title: "Overall Rank",
+                             subtitle: "\(ranked)/\(MuscleGroup.allCases.count) muscle groups ranked",
+                             rank: store.overallScore().map(RankInfo.from),
+                             name: store.profile.name,
+                             stats: [("\(store.sessions.count)", "WORKOUTS"),
+                                     ("\(store.weekStreak) wk", "STREAK"),
+                                     (top, "BEST GROUP")])
     }
 }
 
@@ -243,6 +262,24 @@ struct ExerciseDetailView: View {
         .background(AppBackground())
         .navigationTitle(ex.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ShareRankButton(card: shareCard(ex, r, points), glass: false)
+            }
+        }
+    }
+
+    private func shareCard(_ ex: Exercise, _ r: RankInfo?, _ points: [HistoryPoint]) -> RankShareCard {
+        var stats: [(String, String)] = []
+        if let b = store.bests[exerciseID] {
+            stats.append((store.setText(b.set, ex), "BEST SET"))
+            if ex.kind == .weighted {
+                stats.append((store.weightText(RankEngine.e1RM(weight: b.set.weight, reps: b.set.reps)), "EST. 1RM"))
+            }
+        }
+        stats.append(("\(points.count)", "SESSIONS"))
+        return RankShareCard(title: ex.name, subtitle: "\(ex.muscle.name) · \(ex.equipment.name)",
+                             rank: r, name: store.profile.name, stats: stats)
     }
 
     private func hero(_ ex: Exercise, _ r: RankInfo?) -> some View {

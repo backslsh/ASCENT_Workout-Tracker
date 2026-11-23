@@ -159,6 +159,7 @@ struct OnboardingView: View {
         p.onboarded = true
         Haptics.success()
         store.profile = p
+        store.syncWeightLog()
         Notifier.request()
     }
 }

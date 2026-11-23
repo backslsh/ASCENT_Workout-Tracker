@@ -16,6 +16,22 @@ No account, no server, and no paid Apple services. Everything stays on your phon
 - **Settings**: lb/kg, default rest, weekly goal, male/female rank standards, and JSON backup export/import.
 - Dark mode, a **Liquid Glass** tab bar and controls (real iOS 26 glass, with a frosted-material fallback on iOS 17–18), and spring animations.
 
+### New in 1.1
+- **Plate calculator**: tap the plate icon on any barbell lift to see what goes on each side (choose a 45/35/15 lb or 20/15/10 kg bar).
+- **Supersets & circuits**: the "…" menu → *Superset with Next*. Rest starts only after the last exercise in the group.
+- **Exercise notes**: sticky notes (seat height, grip, band color) that show every time you do that exercise.
+- **Progression hints**: "Go up: 140 lb × 8" or "Aim for 9 reps", based on last time. Tap **Apply** to fill your sets.
+- **Achievements**: 24 badges (streaks, volume, PRs, tiers, home workouts, early bird and more). New unlocks appear on the finish screen.
+- **Body map**: a front/back heatmap colored by rank or by how recently each muscle was trained.
+- **Muscle balance**: sets per muscle group in the last 7 days, plus which groups you've been neglecting.
+- **Share cards**: export your overall rank or any lift's rank as a 9:16 image (share button on Ranks and on each exercise).
+- **Bodyweight tracking**: log weigh-ins and see a trend chart and 30-day change.
+- **My Equipment**: tell the app what you own, and the exercise picker can show only moves you can do.
+- **Automatic weekly backups** to *Files › On My iPhone › Ascend › Backups* (the last 6 are kept).
+- **Accent themes** (Aurora, Ocean, Ember, Crimson, Emerald, Gold, Rose) and optional **sound effects**.
+- **Live Activity**: workout timer and rest countdown on the Lock Screen and Dynamic Island.
+- **Home & Lock Screen widgets**: streak, weekly goal, overall rank, and one-tap pinned routines.
+
 ## How ranks are scored
 - Weighted lifts: estimated 1RM (Epley) ÷ bodyweight.
 - Bodyweight moves: reps, boosted by any added weight.
@@ -44,6 +60,14 @@ You're on Windows and Xcode only runs on macOS, so a free **GitHub Actions** mac
    - Go to *Settings → General → VPN & Device Management* and trust your Apple ID.
    - On iOS 16+, also go to *Settings → Privacy & Security → Developer Mode* → On (this needs a restart).
 
+**Widgets & Live Activity on a free Apple ID:** the IPA now contains a widget extension, so Sideloadly
+registers 2 App IDs (a free account allows 10 new App IDs per week).
+- The **Live Activity** needs no special permission, so it should just work.
+- The **home-screen widget** reads your stats through an App Group. If Sideloadly drops the App Group, the
+  widget shows "Open Ascend to sync" and the rest of the app is unaffected.
+- If an install ever fails because of the extension, tick Sideloadly's *Advanced options → Remove app
+  extensions*. You'll lose the widget and Live Activity, but everything else still works.
+
 **Free Apple ID limits:** the app must be re-signed every **7 days** (Sideloadly can auto-refresh). You
 can have at most 3 sideloaded apps at once. Re-installing over the top **keeps your data**, but deleting the app wipes it, so use
 *Settings → Export Backup* now and then.
@@ -56,4 +80,6 @@ Ascend/App                  App entry, root view, glass tab bar
 Ascend/Models               Data models, exercise library, rank engine, store/persistence
 Ascend/UI                   Theme, liquid-glass modifier, reusable components
 Ascend/Views                Profile, Workout, Active workout, Ranks, History, Settings, Onboarding
+Shared                      Code used by both the app and the widget (snapshot, Live Activity attributes)
+Widgets                     WidgetKit extension: home/lock-screen widget + Live Activity
 ```

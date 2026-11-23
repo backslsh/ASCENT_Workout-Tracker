@@ -29,11 +29,17 @@ struct ActiveWorkoutView: View {
                         }
 
                         ForEach(session.entries) { $entry in
+                            let all = session.wrappedValue.entries
+                            let info = all.supersetInfo(for: entry.id)
                             ExerciseCard(entry: $entry, mode: .live,
                                          bodyweight: session.wrappedValue.bodyweight ?? store.profile.bodyweight,
+                                         superset: info,
                                          onRemove: { remove(entry.id) },
                                          onMoveUp: { move(entry.id, by: -1) },
-                                         onMoveDown: { move(entry.id, by: 1) })
+                                         onMoveDown: { move(entry.id, by: 1) },
+                                         onLinkNext: all.canLinkWithNext(entry.id) ? { link(entry.id) } : nil,
+                                         onUnlink: info != nil ? { unlink(entry.id) } : nil)
+                                .padding(.top, info != nil && info?.isFirst == false ? -8 : 0)
                                 .transition(.scale(scale: 0.95).combined(with: .opacity))
                         }
 
@@ -133,7 +139,10 @@ struct ActiveWorkoutView: View {
     }
 
     private func remove(_ id: UUID) {
-        withAnimation(Theme.spring) { store.active?.entries.removeAll { $0.id == id } }
+        guard var s = store.active else { return }
+        s.entries.removeAll { $0.id == id }
+        s.entries.normalizeSupersets()
+        withAnimation(Theme.spring) { store.active = s }
     }
 
     private func move(_ id: UUID, by delta: Int) {
@@ -141,6 +150,21 @@ struct ActiveWorkoutView: View {
         let j = i + delta
         guard j >= 0, j < s.entries.count else { return }
         s.entries.swapAt(i, j)
+        s.entries.normalizeSupersets()
+        withAnimation(Theme.spring) { store.active = s }
+    }
+
+    private func link(_ id: UUID) {
+        guard var s = store.active else { return }
+        Haptics.select()
+        s.entries.linkWithNext(id)
+        withAnimation(Theme.spring) { store.active = s }
+    }
+
+    private func unlink(_ id: UUID) {
+        guard var s = store.active else { return }
+        Haptics.tap()
+        s.entries.unlinkSuperset(id)
         withAnimation(Theme.spring) { store.active = s }
     }
 }

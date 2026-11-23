@@ -335,6 +335,7 @@ struct NumberField: View {
     @Binding var value: Double
     var placeholder: String = "0"
     var decimals: Bool = true
+    var font: Font = .system(.body, design: .rounded).weight(.semibold)
     @State private var text: String = ""
     @FocusState private var focused: Bool
 
@@ -344,7 +345,7 @@ struct NumberField: View {
         TextField(placeholder, text: $text)
             .keyboardType(decimals ? .decimalPad : .numberPad)
             .multilineTextAlignment(.center)
-            .font(.system(.body, design: .rounded).weight(.semibold))
+            .font(font)
             .focused($focused)
             .onAppear { text = Self.format(value) }
             .onChange(of: text) { _, new in

@@ -66,6 +66,35 @@ enum Equipment: String, Codable, CaseIterable, Identifiable {
     case barbell, dumbbell, machine, cable, kettlebell, bodyweight, band, other
     var id: String { rawValue }
     var name: String { rawValue.capitalized }
+
+    var symbol: String {
+        switch self {
+        case .barbell: return "figure.strengthtraining.traditional"
+        case .dumbbell: return "dumbbell.fill"
+        case .machine: return "gearshape.2.fill"
+        case .cable: return "cable.connector"
+        case .kettlebell: return "scalemass.fill"
+        case .bodyweight: return "figure.walk"
+        case .band: return "arrow.left.and.right"
+        case .other: return "ellipsis.circle"
+        }
+    }
+
+    var ownedName: String {
+        switch self {
+        case .barbell: return "Barbell & plates"
+        case .dumbbell: return "Dumbbells"
+        case .machine: return "Machines"
+        case .cable: return "Cable station"
+        case .kettlebell: return "Kettlebells"
+        case .bodyweight: return "Bodyweight"
+        case .band: return "Resistance bands"
+        case .other: return "Other"
+        }
+    }
+
+    /// Equipment you'd typically have at home.
+    var isHome: Bool { [.dumbbell, .kettlebell, .bodyweight, .band].contains(self) }
 }
 
 struct Exercise: Codable, Identifiable, Hashable {
@@ -99,6 +128,8 @@ struct ExerciseEntry: Codable, Identifiable, Hashable {
     var sets: [SetEntry]
     var restSeconds: Int
     var note: String = ""
+    /// Entries next to each other that share this ID form a superset / circuit.
+    var supersetID: UUID? = nil
 }
 
 struct Routine: Codable, Identifiable, Hashable {
@@ -155,6 +186,76 @@ struct Profile: Codable, Hashable {
     var weeklyGoal: Int = 4
     var onboarded: Bool = false
     var restNotifications: Bool = true
+    var accent: AccentTheme = .aurora
+    var sounds: Bool = true
+    var myEquipment: [Equipment] = []
+    var equipmentFilter: Bool = false
+    var barKg: Double? = nil
+    var autoBackup: Bool = true
+    var liveActivity: Bool = true
+
+    enum CodingKeys: String, CodingKey {
+        case name, age, bodyweight, units, sex, showcase, defaultRest, weeklyGoal, onboarded, restNotifications
+        case accent, sounds, myEquipment, equipmentFilter, barKg, autoBackup, liveActivity
+    }
+}
+
+extension Profile {
+    /// Tolerant decoding: missing or unknown values fall back to defaults, so older data files always load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func v<T: Decodable>(_ k: CodingKeys, _ d: T) -> T { (try? c.decodeIfPresent(T.self, forKey: k)) ?? d }
+        self.init()
+        name = v(.name, name)
+        age = v(.age, age)
+        bodyweight = v(.bodyweight, bodyweight)
+        units = v(.units, units)
+        sex = v(.sex, sex)
+        showcase = v(.showcase, showcase)
+        defaultRest = v(.defaultRest, defaultRest)
+        weeklyGoal = v(.weeklyGoal, weeklyGoal)
+        onboarded = v(.onboarded, onboarded)
+        restNotifications = v(.restNotifications, restNotifications)
+        accent = v(.accent, accent)
+        sounds = v(.sounds, sounds)
+        myEquipment = v(.myEquipment, myEquipment)
+        equipmentFilter = v(.equipmentFilter, equipmentFilter)
+        barKg = (try? c.decodeIfPresent(Double.self, forKey: .barKg)) ?? nil
+        autoBackup = v(.autoBackup, autoBackup)
+        liveActivity = v(.liveActivity, liveActivity)
+    }
+}
+
+// MARK: - Accent themes
+
+enum AccentTheme: String, Codable, CaseIterable, Identifiable {
+    case aurora, ocean, ember, crimson, emerald, gold, rose
+
+    var id: String { rawValue }
+    var name: String { rawValue.capitalized }
+
+    var hex: (UInt32, UInt32) {
+        switch self {
+        case .aurora: return (0x8C7BFF, 0x3FD5FF)
+        case .ocean: return (0x3F8CFF, 0x3FF0D2)
+        case .ember: return (0xFF6A3D, 0xFFC93F)
+        case .crimson: return (0xFF3D6E, 0xFF8A5C)
+        case .emerald: return (0x2FD68A, 0x3FC8FF)
+        case .gold: return (0xF5B83D, 0xFFE58A)
+        case .rose: return (0xFF6FB5, 0xB57BFF)
+        }
+    }
+
+    var accent: Color { Color(hex: hex.0) }
+    var accent2: Color { Color(hex: hex.1) }
+}
+
+// MARK: - Bodyweight log
+
+struct WeightEntry: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var date: Date
+    var kg: Double
 }
 
 struct AppData: Codable {
@@ -163,6 +264,10 @@ struct AppData: Codable {
     var sessions: [WorkoutSession]
     var customExercises: [Exercise]
     var active: WorkoutSession?
+    var exerciseNotes: [String: String]? = nil
+    var weightLog: [WeightEntry]? = nil
+    var achievements: [String: Date]? = nil
+    var lastAutoBackup: Date? = nil
 }
 
 // MARK: - Formatting helpers

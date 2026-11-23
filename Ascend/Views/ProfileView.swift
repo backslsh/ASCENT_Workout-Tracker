@@ -17,6 +17,7 @@ struct ProfileView: View {
                     }
                     IdentityCard()
                     statsRow
+                    progressRow
                     showcaseSection
                     quickStartSection
                 }
@@ -39,6 +40,37 @@ struct ProfileView: View {
             StatTile(value: "\(store.sessions.count)", label: "Workouts", symbol: "flame.fill", color: Theme.warning)
             StatTile(value: "\(store.weekStreak) wk", label: "Streak", symbol: "bolt.heart.fill", color: Theme.danger)
             WeeklyGoalTile(done: store.workoutsThisWeek, goal: store.profile.weeklyGoal)
+        }
+    }
+
+    private var progressRow: some View {
+        let unlockedCount = Achievements.all.filter { store.unlocked[$0.id] != nil }.count
+        let recent = Achievements.all
+            .compactMap { a -> (Achievement, Date)? in
+                guard let d = store.unlocked[a.id] else { return nil }
+                return (a, d)
+            }
+            .max { $0.1 < $1.1 }?.0
+        let log = store.weightLog
+        let trend: String = {
+            guard log.count >= 2, let last = log.last else { return "Tap to log" }
+            let d = store.profile.units.display(last.kg - log[log.count - 2].kg)
+            if abs(d) < 0.05 { return "No change" }
+            return "\(d > 0 ? "▲" : "▼") \(fmtNumber(abs(d))) \(store.profile.units.rawValue)"
+        }()
+        return HStack(spacing: 10) {
+            NavigationLink { AchievementsView() } label: {
+                ProgressLinkTile(value: "\(unlockedCount)/\(Achievements.all.count)",
+                                 label: recent?.title ?? "Achievements",
+                                 symbol: recent?.symbol ?? "rosette",
+                                 color: recent?.color ?? RankTier.gold.colors[0])
+            }
+            .buttonStyle(.pressable)
+            NavigationLink { BodyweightView() } label: {
+                ProgressLinkTile(value: store.weightText(store.profile.bodyweight), label: trend,
+                                 symbol: "scalemass.fill", color: Theme.accent2)
+            }
+            .buttonStyle(.pressable)
         }
     }
 
@@ -137,6 +169,34 @@ struct ProfileView: View {
 }
 
 // MARK: - Pieces
+
+struct ProgressLinkTile: View {
+    let value: String
+    let label: String
+    let symbol: String
+    let color: Color
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.headline)
+                .foregroundStyle(color)
+                .frame(width: 38, height: 38)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(color.opacity(0.15)))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.system(.headline, design: .rounded).weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(label).font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Theme.textTertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: 12, radius: 18)
+    }
+}
 
 struct IdentityCard: View {
     @EnvironmentObject var store: AppStore

@@ -188,10 +188,15 @@ struct RoutineEditorView: View {
                     .card()
 
                     ForEach($draft.entries) { $entry in
+                        let info = draft.entries.supersetInfo(for: entry.id)
                         ExerciseCard(entry: $entry, mode: .plan, bodyweight: store.profile.bodyweight,
+                                     superset: info,
                                      onRemove: { remove(entry.id) },
                                      onMoveUp: { move(entry.id, by: -1) },
-                                     onMoveDown: { move(entry.id, by: 1) })
+                                     onMoveDown: { move(entry.id, by: 1) },
+                                     onLinkNext: draft.entries.canLinkWithNext(entry.id) ? { link(entry.id) } : nil,
+                                     onUnlink: info != nil ? { unlink(entry.id) } : nil)
+                            .padding(.top, info != nil && info?.isFirst == false ? -8 : 0)
                             .transition(.scale(scale: 0.95).combined(with: .opacity))
                     }
 
@@ -242,13 +247,29 @@ struct RoutineEditorView: View {
     }
 
     private func remove(_ id: UUID) {
-        withAnimation(Theme.spring) { draft.entries.removeAll { $0.id == id } }
+        withAnimation(Theme.spring) {
+            draft.entries.removeAll { $0.id == id }
+            draft.entries.normalizeSupersets()
+        }
     }
 
     private func move(_ id: UUID, by delta: Int) {
         guard let i = draft.entries.firstIndex(where: { $0.id == id }) else { return }
         let j = i + delta
         guard j >= 0, j < draft.entries.count else { return }
-        withAnimation(Theme.spring) { draft.entries.swapAt(i, j) }
+        withAnimation(Theme.spring) {
+            draft.entries.swapAt(i, j)
+            draft.entries.normalizeSupersets()
+        }
+    }
+
+    private func link(_ id: UUID) {
+        Haptics.select()
+        withAnimation(Theme.spring) { draft.entries.linkWithNext(id) }
+    }
+
+    private func unlink(_ id: UUID) {
+        Haptics.tap()
+        withAnimation(Theme.spring) { draft.entries.unlinkSuperset(id) }
     }
 }

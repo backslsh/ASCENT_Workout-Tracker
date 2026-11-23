@@ -7,7 +7,7 @@ struct WorkoutSummaryView: View {
     @State private var appeared = false
     @State private var saved = false
 
-    private var celebrate: Bool { !summary.prs.isEmpty || !summary.rankUps.isEmpty }
+    private var celebrate: Bool { !summary.prs.isEmpty || !summary.rankUps.isEmpty || !summary.achievements.isEmpty }
     private var s: WorkoutSession { summary.session }
 
     var body: some View {
@@ -44,6 +44,26 @@ struct WorkoutSummaryView: View {
                                     .opacity(appeared ? 1 : 0)
                                     .offset(y: appeared ? 0 : 24)
                                     .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.25 + Double(i) * 0.08), value: appeared)
+                            }
+                        }
+                    }
+
+                    if !summary.achievements.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionHeader(title: "Achievements Unlocked")
+                            ForEach(Array(summary.achievements.enumerated()), id: \.element.id) { i, a in
+                                HStack(spacing: 12) {
+                                    AchievementBadge(achievement: a, unlocked: true, size: 44)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(a.title).font(.subheadline.weight(.bold))
+                                        Text(store.achievementDetail(a)).font(.caption).foregroundStyle(Theme.textSecondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .card(padding: 12, radius: 18)
+                                .opacity(appeared ? 1 : 0)
+                                .scaleEffect(appeared ? 1 : 0.85)
+                                .animation(.spring(response: 0.5, dampingFraction: 0.65).delay(0.35 + Double(i) * 0.1), value: appeared)
                             }
                         }
                     }
@@ -90,6 +110,13 @@ struct WorkoutSummaryView: View {
         .onAppear {
             withAnimation(.spring(response: 0.55, dampingFraction: 0.6).delay(0.1)) { appeared = true }
             if celebrate { Haptics.success() }
+            if !summary.rankUps.isEmpty || !summary.achievements.isEmpty {
+                Sounds.rankUp()
+            } else if !summary.prs.isEmpty {
+                Sounds.pr()
+            } else {
+                Sounds.finish()
+            }
         }
     }
 

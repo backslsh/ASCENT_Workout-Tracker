@@ -25,19 +25,21 @@ enum RankTier: Int, CaseIterable, Comparable, Hashable, Identifiable {
         [0, 0.18, 0.32, 0.46, 0.58, 0.70, 0.81, 0.91, 1.0][rawValue]
     }
 
-    var colors: [Color] {
+    var hexColors: [UInt32] {
         switch self {
-        case .iron: return [Color(hex: 0x9AA0A9), Color(hex: 0x4A4E55)]
-        case .bronze: return [Color(hex: 0xE8A86E), Color(hex: 0x8C5326)]
-        case .silver: return [Color(hex: 0xE6ECF2), Color(hex: 0x7F8A97)]
-        case .gold: return [Color(hex: 0xFFE07A), Color(hex: 0xD99A1E)]
-        case .platinum: return [Color(hex: 0x8FF5E4), Color(hex: 0x1F9E8F)]
-        case .diamond: return [Color(hex: 0x9CC8FF), Color(hex: 0x3D6BFF)]
-        case .master: return [Color(hex: 0xD3A6FF), Color(hex: 0x7B3FE4)]
-        case .grandmaster: return [Color(hex: 0xFF9AAE), Color(hex: 0xE0244E)]
-        case .legend: return [Color(hex: 0xFFD36E), Color(hex: 0xFF5E8A), Color(hex: 0x8C5CFF)]
+        case .iron: return [0x9AA0A9, 0x4A4E55]
+        case .bronze: return [0xE8A86E, 0x8C5326]
+        case .silver: return [0xE6ECF2, 0x7F8A97]
+        case .gold: return [0xFFE07A, 0xD99A1E]
+        case .platinum: return [0x8FF5E4, 0x1F9E8F]
+        case .diamond: return [0x9CC8FF, 0x3D6BFF]
+        case .master: return [0xD3A6FF, 0x7B3FE4]
+        case .grandmaster: return [0xFF9AAE, 0xE0244E]
+        case .legend: return [0xFFD36E, 0xFF5E8A, 0x8C5CFF]
         }
     }
+
+    var colors: [Color] { hexColors.map { Color(hex: $0) } }
 
     var symbol: String {
         switch self {

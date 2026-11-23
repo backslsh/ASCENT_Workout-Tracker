@@ -7,9 +7,17 @@ struct ExerciseCard: View {
     @Binding var entry: ExerciseEntry
     let mode: CardMode
     var bodyweight: Double
+    var superset: SupersetInfo? = nil
     var onRemove: () -> Void
     var onMoveUp: (() -> Void)? = nil
     var onMoveDown: (() -> Void)? = nil
+    var onLinkNext: (() -> Void)? = nil
+    var onUnlink: (() -> Void)? = nil
+
+    @State private var editingNote = false
+    @State private var noteDraft = ""
+    @State private var showPlates = false
+    @State private var hintDismissed = false
 
     private var exercise: Exercise { store.exercise(entry.exerciseID) ?? .unknown }
     private var previous: [SetEntry] {
@@ -20,8 +28,11 @@ struct ExerciseCard: View {
         let ex = exercise
         let prev = previous
         let best = store.bests[ex.id]?.perf ?? 0
+        let note = store.note(for: ex.id)
         VStack(alignment: .leading, spacing: 10) {
             header(ex)
+            if !note.isEmpty { noteRow(note) }
+            if let hint = activeHint { hintRow(hint) }
             columnHeader(ex)
             VStack(spacing: 6) {
                 ForEach($entry.sets) { $set in
@@ -48,7 +59,25 @@ struct ExerciseCard: View {
             .buttonStyle(.pressable)
         }
         .card(padding: 14)
+        .overlay(alignment: .leading) {
+            if let superset {
+                Capsule().fill(superset.color).frame(width: 4).padding(.vertical, 22).offset(x: 1)
+            }
+        }
+        .alert("Exercise Note", isPresented: $editingNote) {
+            TextField("e.g. Seat on notch 4", text: $noteDraft)
+            Button("Save") { store.setNote(noteDraft, for: ex.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Shown every time you do \(ex.name).")
+        }
+        .sheet(isPresented: $showPlates) {
+            PlateCalculatorView(initialKg: plateTarget, onApply: { kg in applyWeight(kg) })
+                .environmentObject(store)
+        }
     }
+
+    // MARK: Header
 
     @ViewBuilder
     private func header(_ ex: Exercise) -> some View {
@@ -56,16 +85,34 @@ struct ExerciseCard: View {
             MuscleIcon(group: ex.muscle, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(ex.name).font(.headline).lineLimit(1)
+                if let superset {
+                    Label(superset.label.uppercased(), systemImage: "link")
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundStyle(superset.color)
+                }
                 HStack(spacing: 6) {
                     Text(ex.muscle.name)
                     Text("·")
                     Image(systemName: "timer")
-                    Text(fmtRest(entry.restSeconds))
+                    Text(superset != nil && superset?.isLast == false ? "No rest" : fmtRest(entry.restSeconds))
                 }
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
             }
             Spacer(minLength: 0)
+            if isBarbell {
+                Button {
+                    Haptics.tap()
+                    showPlates = true
+                } label: {
+                    Image(systemName: "circle.circle.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.accent2)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Theme.accent2.opacity(0.12)))
+                }
+                .buttonStyle(.pressable)
+            }
             if mode == .live {
                 RankBadge(rank: store.rank(ex.id), size: 28)
             }
@@ -82,6 +129,21 @@ struct ExerciseCard: View {
                     }
                 } label: {
                     Label("Rest Timer (\(fmtRest(entry.restSeconds)))", systemImage: "timer")
+                }
+                Button {
+                    noteDraft = store.note(for: ex.id)
+                    editingNote = true
+                } label: {
+                    Label(store.note(for: ex.id).isEmpty ? "Add Note" : "Edit Note", systemImage: "note.text")
+                }
+                if isBarbell {
+                    Button { showPlates = true } label: { Label("Plate Calculator", systemImage: "circle.circle") }
+                }
+                if let onLinkNext {
+                    Button(action: onLinkNext) { Label("Superset with Next", systemImage: "link") }
+                }
+                if let onUnlink {
+                    Button(action: onUnlink) { Label("Remove from Superset", systemImage: "minus.circle") }
                 }
                 if let onMoveUp {
                     Button(action: onMoveUp) { Label("Move Up", systemImage: "arrow.up") }
@@ -116,6 +178,96 @@ struct ExerciseCard: View {
         .padding(.horizontal, 4)
     }
 
+    // MARK: Note & progression hint
+
+    private func noteRow(_ note: String) -> some View {
+        Button {
+            noteDraft = note
+            editingNote = true
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "note.text").font(.caption.weight(.bold)).foregroundStyle(Theme.warning)
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.warning.opacity(0.10)))
+        }
+        .buttonStyle(.pressable)
+    }
+
+    private var activeHint: ProgressionHint? {
+        guard mode == .live, !hintDismissed, !entry.sets.contains(where: { $0.done && !$0.isWarmup }) else { return nil }
+        return store.progressionHint(for: entry)
+    }
+
+    private func hintRow(_ h: ProgressionHint) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.up.forward.circle.fill")
+                .font(.title3)
+                .foregroundStyle(Theme.success)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(h.title).font(.subheadline.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+                Text(h.detail).font(.caption2).foregroundStyle(Theme.textSecondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Button {
+                Haptics.success()
+                var e = entry
+                store.apply(h, to: &e)
+                withAnimation(Theme.snappy) {
+                    entry = e
+                    hintDismissed = true
+                }
+            } label: {
+                Text("Apply")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.black)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .background(Capsule().fill(Theme.success))
+            }
+            .buttonStyle(.pressable)
+            Button {
+                Haptics.tap()
+                withAnimation(Theme.snappy) { hintDismissed = true }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 24, height: 30)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.success.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.success.opacity(0.25), lineWidth: 1))
+        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+    }
+
+    // MARK: Plates
+
+    private var isBarbell: Bool { exercise.equipment == .barbell && exercise.kind == .weighted }
+
+    private var plateTarget: Double {
+        let working = entry.sets.filter { !$0.isWarmup }
+        if let s = working.first(where: { !$0.done && $0.weight > 0 }) { return s.weight }
+        return working.last?.weight ?? entry.sets.last?.weight ?? 0
+    }
+
+    private func applyWeight(_ kg: Double) {
+        withAnimation(Theme.snappy) {
+            for i in entry.sets.indices where !entry.sets[i].done && !entry.sets[i].isWarmup {
+                entry.sets[i].weight = kg
+            }
+        }
+    }
+
+    // MARK: Sets
+
     private func workingNumber(_ id: UUID) -> Int {
         var n = 0
         for s in entry.sets {
@@ -145,7 +297,12 @@ struct ExerciseCard: View {
         withAnimation(Theme.snappy) { entry.sets[i].done.toggle() }
         if entry.sets[i].done {
             Haptics.medium()
-            store.startRest(entry.restSeconds)
+            let ex = exercise
+            if isPR(entry.sets[i], ex, store.bests[ex.id]?.perf ?? 0) { Sounds.pr() } else { Sounds.setDone() }
+            // In a superset, rest only after the last exercise of the group.
+            if superset == nil || superset?.isLast == true {
+                store.startRest(entry.restSeconds)
+            }
         } else {
             Haptics.tap()
         }

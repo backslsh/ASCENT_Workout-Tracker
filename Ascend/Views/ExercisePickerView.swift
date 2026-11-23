@@ -9,9 +9,16 @@ struct ExercisePickerView: View {
     @State private var selected: [String] = []
     @State private var showCustom = false
 
+    private var gearFilterOn: Bool { store.profile.equipmentFilter && !store.profile.myEquipment.isEmpty }
+
     private var filtered: [Exercise] {
-        store.allExercises
-            .filter { (filter == nil || $0.muscle == filter) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)) }
+        let gear = gearFilterOn
+        return store.allExercises
+            .filter { ex in
+                (filter == nil || ex.muscle == filter)
+                    && (query.isEmpty || ex.name.localizedCaseInsensitiveContains(query))
+                    && (!gear || store.canDo(ex))
+            }
             .sorted { $0.name < $1.name }
     }
 
@@ -21,6 +28,12 @@ struct ExercisePickerView: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
+                            if !store.profile.myEquipment.isEmpty {
+                                Chip(title: "My Gear", color: Theme.accent2, selected: gearFilterOn) {
+                                    withAnimation(Theme.snappy) { store.profile.equipmentFilter.toggle() }
+                                }
+                                Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 22)
+                            }
                             Chip(title: "All", selected: filter == nil) { withAnimation(Theme.snappy) { filter = nil } }
                             ForEach(MuscleGroup.allCases) { g in
                                 Chip(title: g.name, color: g.color, selected: filter == g) {

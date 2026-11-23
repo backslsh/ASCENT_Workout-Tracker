@@ -1,14 +1,17 @@
 import SwiftUI
 import UIKit
+import Observation
+import AudioToolbox
 
-extension Color {
-    init(hex: UInt32, opacity: Double = 1) {
-        self.init(.sRGB,
-                  red: Double((hex >> 16) & 0xFF) / 255,
-                  green: Double((hex >> 8) & 0xFF) / 255,
-                  blue: Double(hex & 0xFF) / 255,
-                  opacity: opacity)
-    }
+/// The selected accent palette. `@Observable`, so every view that reads `Theme.accent`
+/// re-renders automatically when the user picks a new theme.
+@Observable
+final class ThemeManager {
+    var theme: AccentTheme = .aurora
+}
+
+extension ThemeManager {
+    static let shared = ThemeManager()
 }
 
 enum Theme {
@@ -16,8 +19,8 @@ enum Theme {
     static let surface = Color(hex: 0x131318)
     static let surface2 = Color(hex: 0x1C1C23)
     static let stroke = Color.white.opacity(0.07)
-    static let accent = Color(hex: 0x8C7BFF)
-    static let accent2 = Color(hex: 0x3FD5FF)
+    static var accent: Color { ThemeManager.shared.theme.accent }
+    static var accent2: Color { ThemeManager.shared.theme.accent2 }
     static let success = Color(hex: 0x4BE3A0)
     static let warning = Color(hex: 0xFFB547)
     static let danger = Color(hex: 0xFF5D6C)
@@ -129,4 +132,21 @@ enum Haptics {
     static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
     static func select() { UISelectionFeedbackGenerator().selectionChanged() }
+}
+
+// MARK: - Sound effects (built-in iOS system sounds; they respect the silent switch)
+
+enum Sounds {
+    static var enabled = true
+
+    private static func play(_ id: SystemSoundID) {
+        guard enabled else { return }
+        AudioServicesPlaySystemSound(id)
+    }
+
+    static func setDone() { play(1104) }
+    static func restDone() { play(1007) }
+    static func pr() { play(1025) }
+    static func rankUp() { play(1025) }
+    static func finish() { play(1001) }
 }
